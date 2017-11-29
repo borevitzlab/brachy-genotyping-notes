@@ -1,0 +1,134 @@
+---
+title: "SpeciesID"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+```
+```{r load}
+readcounts = read.delim("data/2017-10-19_spp-id/hybridum_idxstats.tsv",
+                        col.names = c("sample", "contig", "size", "mapped", "unmapped")) %>%
+    filter(!grepl('^scaf', contig, ignore.case = T)) %>% 
+    separate(contig, into=c("chrom", "species"), "_") %>% 
+    filter(!is.na(species))
+str(readcounts)
+```
+
+```{r summarise}
+readcounts.spp = readcounts %>% 
+    group_by(sample, species) %>% 
+    summarise(mapped = sum(mapped)) %>% 
+    spread(species, mapped) %>%
+    mutate(total.reads = `Bd21-3` + Bstacei,
+           prop.distachyon = `Bd21-3` / total.reads) %>% 
+    ungroup()
+str(readcounts.spp)
+```
+
+```{r hist-sppdef}
+hist(readcounts.spp$prop.distachyon, breaks=200)
+plot(density(readcounts.spp$prop.distachyon))
+```
+
+```{r sppdef}
+species.id = cut(readcounts.spp$prop.distachyon,
+                 breaks=c(0, 0.1, 0.4, 0.6, 0.9, 1),
+                 labels=c("stacei", "intermediate_staXhyb", "hybridum",
+                          "intermediate_hybXdis", "distachyon"))
+readcounts.spp$species.id = species.id
+readcounts.spp = readcounts.spp %>% 
+    mutate(species.id=ifelse(total.reads < 50000, "low_coverage", as.character(species.id)))
+```
+
+```{r}
+ggplot(readcounts.spp, aes(`Bd21-3`, Bstacei)) +
+    geom_point(aes(colour=species.id))
+
+ggplot(readcounts.spp, aes(log(`Bd21-3`), log(Bstacei))) +
+    geom_point(aes(colour=species.id))
+```
+
+# Version 2
+
+This uses the number of covered bases, rather than the number of reads that align. To remove stochastic reads (this is GBS, remember) we use a threshold of 3 reads to call a base covered.
+
+These read counts were created from mosdepth's histogram output using the following command: `grep -v '^total' data/coverage/bwa/bhybridum/BR* | sed -e 's/.mosdepth.dist.txt:/\t/' -e 's/.*\///' | awk '$3 ~ /^[1234]$/' > bhybridum_covered.tsv`. We can then select the depth we want during import.
+
+```{r}
+covered = read.delim("data/2017-11-30_spp-redux/bhybridum_covered.tsv",
+                        col.names = c("sample", "contig", "depth", "proportion")) %>%
+    filter(depth == 1) %>% 
+    select(-depth) %>%
+    filter(!grepl('^scaf', contig, ignore.case = T)) %>% 
+    separate(contig, into=c("chrom", "species"), "_") %>% 
+    filter(!is.na(species))
+str(covered)
+```
+
+```{r}
+str(covered)
+covered.spp = covered %>% 
+    group_by(sample, species) %>% 
+    summarise(proportion = sum(proportion)) %>% 
+    spread(species, proportion, fill=0) %>%
+    ungroup() %>% 
+    mutate(`Bd21-3` = `Bd21-3`/ max(`Bd21-3`),
+           Bstacei = Bstacei / max(Bstacei)) %>%
+    mutate(total.cov = `Bd21-3` + Bstacei,
+           prop.distachyon = `Bd21-3` / total.cov)
+
+str(covered.spp)
+```
+
+```{r}
+ggplot(covered.spp, aes(`Bd21-3`, Bstacei)) +
+    geom_point()
+```
+
+```{r}
+lowcov.samples = readcounts.spp %>% 
+    filter(total.reads <= 150000) %>% 
+    select(sample) %>% 
+    unlist() %>% 
+    as.character()
+```
+
+
+## Species ID
+
+This histogram shows the thresholds for calling species. Blue lines delimt classes.
+
+```{r}
+hist(covered.spp$prop.distachyon, breaks=200)
+abline(v=0.03,col="blue")
+abline(v=0.32,col="blue")
+abline(v=0.36,col="blue")
+abline(v=0.94,col="blue")
+```
+
+```{r}
+
+covered.spp.id = covered.spp %>% 
+    mutate(species.id = as.character(cut(prop.distachyon, breaks=c(-0.01, 0.03, 0.32, 0.36, 0.94, 1.01),
+                                         labels=c("stacei", "intermediate_staXhyb", "hybridum",
+                                                  "intermediate_hybXdis", "distachyon"))),
+           species.id = ifelse(sample %in% lowcov.samples, "low_coverage", species.id),
+           is.intermediate = as.integer(grepl('^low|intermediate', species.id, perl=T)))
+
+
+ggplot(covered.spp.id, aes(`Bd21-3`, Bstacei)) +
+    geom_point(aes(colour=species.id, alpha=is.intermediate)) +
+    scale_alpha(guide=F, range=c(.8, .4)) +
+    scale_color_brewer(palette="Set2", name="Species") +
+    theme_bw()
+
+
+```
+
+## Final numbers
+The below are the numbers of samples called to each species.
+
+```{r}
+table(covered.spp.id$species.id)
+```

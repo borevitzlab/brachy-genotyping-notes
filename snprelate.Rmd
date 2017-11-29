@@ -1,0 +1,103 @@
+---
+title: "Snprelate"
+output:
+  html_document:
+    dev: svg
+---
+
+```{r setup, include=FALSE}
+library(SNPRelate)
+library(tidyverse)
+```
+
+```{r metadata}
+metadata = read.csv("https://git.io/vd7Be")
+str(metadata)
+```
+
+```{r geno}
+# snpgdsVCF2GDS("data/2017-10-19_filtered_default.vcf.gz", "data/2017-10-19_bd21-3-filtered-default.gds")
+geno = snpgdsOpen("data/2017-10-19_bd21-3-filtered-default.gds")
+samp = snpgdsSummary(geno)$sample.id
+```
+
+```{r cutoffs}
+max.snp.miss.rate = 0.95
+max.samp.miss.rate = 0.98
+min.maf = 0.01
+```
+
+```{r}
+samp.bdis = metadata %>% 
+    filter(sp.by.seq=="distachyon" & anon.name %in% samp)  %>% 
+    select(anon.name) %>% 
+    unlist() %>% 
+    as.character()
+length(samp.bdis)
+table(samp.bdis %in% samp)
+```
+
+
+```{r samplesel}
+snp.missfilt = snpgdsSelectSNP(geno, sample.id=samp.bdis, missing.rate=max.snp.miss.rate,
+                               autosome.only=F)
+length(snp.missfilt)
+miss.samp = snpgdsSampMissRate(geno, snp.id=snp.missfilt)
+samp.missfilt = samp[miss.samp <= max.samp.miss.rate]
+hist(miss.samp, breaks=100, main="Sample Missing Data")
+abline(v=max.samp.miss.rate, col="blue", lwd=2)
+length(samp.missfilt)
+```
+
+
+```{r snpsel}
+srf = snpgdsSNPRateFreq(geno, sample.id=samp.missfilt)
+miss.snp = srf$MissingRate
+hist(miss.snp, breaks=50)
+abline(v=max.snp.miss.rate, col="blue", lwd=2)
+
+maf = srf$MinorFreq
+hist(maf, breaks=50)
+abline(v=min.maf, lwd=2, col="blue")
+
+snp.mismaffilt = snpgdsSelectSNP(geno, sample.id = samp.missfilt, maf=min.maf,
+                                 missing.rate=max.snp.miss.rate, autosome.only=F)
+length(snp.mismaffilt)
+```
+
+
+```{r image,dev="png"}
+image(snpgdsGetGeno(geno, sample.id=samp.missfilt, snp.id=sample(snp.mismaffilt, size = 20000)))
+```
+
+Sparse as fark!
+
+
+```{r ibs}
+ibs = snpgdsIBS(geno, sample.id=samp.missfilt, snp.id=snp.mismaffilt,
+                autosome.only=F, num.thread=4)
+ibs.nacnt = rowSums(is.na(ibs$ibs))
+table(ibs.nacnt)
+samp.ibsna = ibs$sample.id[ibs.nacnt <= 1]
+ibs = snpgdsIBS(geno, sample.id=samp.ibsna, snp.id=snp.mismaffilt,
+                autosome.only=F, num.thread = 4)
+ibs.nacnt = rowSums(is.na(ibs$ibs))
+table(ibs.nacnt)
+```
+
+
+
+```{r}
+hc = snpgdsHCluster(ibs)
+hc %>% 
+    snpgdsCutTree() %>% 
+    snpgdsDrawTree()
+```
+
+
+```{r}
+d = dist(is.na(snpgdsGetGeno(geno,snp.id=sample(1:1700000, size = 1000))))
+```
+
+
+
