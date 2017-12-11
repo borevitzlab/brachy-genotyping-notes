@@ -6,6 +6,7 @@ output: html_document
 ```{r setup, include=FALSE}
 library(tidyverse)
 ```
+
 ```{r load}
 readcounts = read.delim("data/2017-10-19_spp-id/hybridum_idxstats.tsv",
                         col.names = c("sample", "contig", "size", "mapped", "unmapped")) %>%
@@ -38,7 +39,7 @@ species.id = cut(readcounts.spp$prop.distachyon,
                           "intermediate_hybXdis", "distachyon"))
 readcounts.spp$species.id = species.id
 readcounts.spp = readcounts.spp %>% 
-    mutate(species.id=ifelse(total.reads < 50000, "low_coverage", as.character(species.id)))
+    mutate(species.id=ifelse(total.reads < 150000, "low_coverage", as.character(species.id)))
 ```
 
 ```{r}
@@ -58,7 +59,7 @@ These read counts were created from mosdepth's histogram output using the follow
 ```{r}
 covered = read.delim("data/2017-11-30_spp-redux/bhybridum_covered.tsv",
                         col.names = c("sample", "contig", "depth", "proportion")) %>%
-    filter(depth == 1) %>% 
+    filter(depth == 4) %>% 
     select(-depth) %>%
     filter(!grepl('^scaf', contig, ignore.case = T)) %>% 
     separate(contig, into=c("chrom", "species"), "_") %>% 
@@ -73,8 +74,8 @@ covered.spp = covered %>%
     summarise(proportion = sum(proportion)) %>% 
     spread(species, proportion, fill=0) %>%
     ungroup() %>% 
-    mutate(`Bd21-3` = `Bd21-3`/ max(`Bd21-3`),
-           Bstacei = Bstacei / max(Bstacei)) %>%
+#    mutate(`Bd21-3` = `Bd21-3`/ max(`Bd21-3`),
+#           Bstacei = Bstacei / max(Bstacei)) %>%
     mutate(total.cov = `Bd21-3` + Bstacei,
            prop.distachyon = `Bd21-3` / total.cov)
 
@@ -102,33 +103,96 @@ This histogram shows the thresholds for calling species. Blue lines delimt class
 ```{r}
 hist(covered.spp$prop.distachyon, breaks=200)
 abline(v=0.03,col="blue")
-abline(v=0.32,col="blue")
-abline(v=0.36,col="blue")
+abline(v=0.28,col="blue")
+abline(v=0.34,col="blue")
 abline(v=0.94,col="blue")
 ```
 
 ```{r}
 
 covered.spp.id = covered.spp %>% 
-    mutate(species.id = as.character(cut(prop.distachyon, breaks=c(-0.01, 0.03, 0.32, 0.36, 0.94, 1.01),
+    mutate(species.id = as.character(cut(prop.distachyon, breaks=c(-0.01, 0.03, 0.28, 0.34, 0.94, 1.01),
                                          labels=c("stacei", "intermediate_staXhyb", "hybridum",
                                                   "intermediate_hybXdis", "distachyon"))),
            species.id = ifelse(sample %in% lowcov.samples, "low_coverage", species.id),
            is.intermediate = as.integer(grepl('^low|intermediate', species.id, perl=T)))
 
 
-ggplot(covered.spp.id, aes(`Bd21-3`, Bstacei)) +
+p = ggplot(covered.spp.id, aes(`Bd21-3`, Bstacei)) +
     geom_point(aes(colour=species.id, alpha=is.intermediate)) +
-    scale_alpha(guide=F, range=c(.8, .4)) +
+    scale_alpha(guide=F, range=c(.8, .3)) +
     scale_color_brewer(palette="Set2", name="Species") +
+    labs(x="B. distachyon", y="B. stacei") +
     theme_bw()
-
-
+print(p)
+```
+```{r figouput,include=F}
+svg("out/SpeciesID.svg", width=7, height=5)
+print(p)
+dev.off()
+pdf("out/SpeciesID.pdf", width=7, height=5)
+print(p)
+dev.off()
+png("out/SpeciesID.png", width=7, height=5, units="in", res=300)
+print(p)
+dev.off()
 ```
 
 ## Final numbers
+
 The below are the numbers of samples called to each species.
 
 ```{r}
 table(covered.spp.id$species.id)
+```
+
+# Compare to Jared's
+
+
+```{r}
+metadata = read.csv("https://github.com/borevitzlab/brachy-genotyping/raw/master/metadata/brachy-metadata.csv", stringsAsFactors = F)
+str(metadata)
+```
+
+
+```{r}
+sppmeta = metadata %>% 
+    select(anon.name, accession, well.name, species.ID) %>% 
+    rename(species.jared = species.ID) %>% 
+    unique()
+
+sppreads = readcounts.spp %>% 
+    select(sample, species.id) %>%
+    rename(species.readnum = species.id)
+
+sppid = covered.spp.id %>% 
+    select(sample, species.id) %>% 
+    left_join(sppmeta, by=c("sample"="anon.name")) %>% 
+    mutate(species.id = as.factor(species.id),
+           species.jared = as.factor(species.jared)) %>% 
+    left_join(sppreads, by="sample") %>% 
+    filter(accession != "")
+write.csv(sppid, "out/species_id.csv", row.names = F)
+
+filter(sppid, species.id != species.readnum) %>% 
+    summary
+```
+
+
+```{r}
+
+spponly = sppid %>%
+    filter(species.id %in% c("distachyon", "hybridum", "stacei")) %>% 
+    filter(species.jared %in% c("distachyon", "hybridum", "stacei")) %>% 
+    mutate(species.id = as.factor(as.character(species.id))) %>% 
+    mutate(species.jared = as.factor(as.character(species.jared)))
+
+
+plot(species.jared ~ species.id, data=spponly, col=rainbow(length(levels(spponly$species.jared))))
+
+table(paste(spponly$species.id, spponly$species.jared))
+
+disagree.jared = filter(spponly, species.id != species.jared)
+summary(disagree.jared)
+write.csv(disagree.jared, "out/sppid_jared_disagree.csv")
 ```

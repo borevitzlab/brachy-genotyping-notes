@@ -2,102 +2,318 @@
 title: "Snprelate"
 output:
   html_document:
-    dev: svg
+    dev: [svg, png]
 ---
 
 ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
 library(SNPRelate)
 library(tidyverse)
 ```
 
 ```{r metadata}
-metadata = read.csv("https://git.io/vd7Be")
-str(metadata)
+metadata = read.csv("https://github.com/borevitzlab/brachy-genotyping/raw/master/metadata/brachy-metadata.csv")
+#str(metadata)
+spp = read.csv("data/species_id.csv")
+#str(spp)
 ```
 
-```{r geno}
-# snpgdsVCF2GDS("data/2017-10-19_filtered_default.vcf.gz", "data/2017-10-19_bd21-3-filtered-default.gds")
-geno = snpgdsOpen("data/2017-10-19_bd21-3-filtered-default.gds")
+```{r vcf2gds,cache=T}
+snpgdsVCF2GDS("data/2017-11-30_bhybridum_filtered_default.vcf.gz",
+              "data/2017-11-30_bhybridum_filtered_default.gds")
+```
+
+```{r geno.open}
+geno = snpgdsOpen("data/2017-11-30_bhybridum_filtered_default.gds",
+                  allow.duplicate = T, readonly = T)
+```
+
+```{r geno.summ,cache=T}
 samp = snpgdsSummary(geno)$sample.id
 ```
 
-```{r cutoffs}
-max.snp.miss.rate = 0.95
-max.samp.miss.rate = 0.98
-min.maf = 0.01
-```
+
+## Filter out very bad missing data
 
 ```{r}
-samp.bdis = metadata %>% 
-    filter(sp.by.seq=="distachyon" & anon.name %in% samp)  %>% 
-    select(anon.name) %>% 
-    unlist() %>% 
-    as.character()
-length(samp.bdis)
-table(samp.bdis %in% samp)
+snp.missfilt = snpgdsSelectSNP(geno, missing.rate=0.999, autosome.only=F)
 ```
 
+The total number of SNPs remaining is `r length(snp.missfilt)`.
+
+
+## Species subset
+
+Directly subset the three species' genotype matricies.                               
 
 ```{r samplesel}
-snp.missfilt = snpgdsSelectSNP(geno, sample.id=samp.bdis, missing.rate=max.snp.miss.rate,
-                               autosome.only=F)
-length(snp.missfilt)
-miss.samp = snpgdsSampMissRate(geno, snp.id=snp.missfilt)
-samp.missfilt = samp[miss.samp <= max.samp.miss.rate]
-hist(miss.samp, breaks=100, main="Sample Missing Data")
-abline(v=max.samp.miss.rate, col="blue", lwd=2)
-length(samp.missfilt)
+chrom = read.gdsn(index.gdsn(geno, "snp.chromosome"))[snp.missfilt]
+snp.dis = snp.missfilt[grep('Bd21-3', chrom)]
+snp.sta = snp.missfilt[grep('Bstacei', chrom)]
+snp.all = snp.missfilt
+samp.hyb = filter(spp, species.id == "hybridum")$sample
+samp.dis = filter(spp, species.id == "distachyon")$sample
+samp.sta = filter(spp, species.id == "stacei")$sample
 ```
 
 
-```{r snpsel}
-srf = snpgdsSNPRateFreq(geno, sample.id=samp.missfilt)
+## Functions for further filtering
+
+These things are in common for each species of brachy, so turn them into functions.
+
+```{r}
+ssp.filt = function(geno, samps, snps,  max.snp.miss.rate=0.99,
+                    max.samp.miss.rate=0.99, min.maf=0.001 ) {
+    miss.samp = snpgdsSampMissRate(geno, snp.id=snps, sample.id=samps)
+    
+    hist(miss.samp, breaks=100, main="Sample Missing Data (pre-filt)")
+    abline(v=max.samp.miss.rate, col="blue", lwd=2)
+    
+    samps = samps[miss.samp <= max.samp.miss.rate]
+    
+    srf = snpgdsSNPRateFreq(geno, sample.id=samps, snp.id = snps)
+    miss.snp = srf$MissingRate
+    hist(miss.snp, breaks=100, main="SNP missing data")
+    abline(v=max.snp.miss.rate, col="blue", lwd=2)
+    
+    maf = srf$MinorFreq
+    hist(maf, breaks=50, main="SNP MAF")
+    abline(v=min.maf, lwd=2, col="blue")
+    
+    snps = snpgdsSelectSNP(geno, sample.id=samps, snp.id=snps, maf=min.maf,
+                                     missing.rate=max.snp.miss.rate, autosome.only=F)
+    
+    miss.samp = snpgdsSampMissRate(geno, snp.id=snps, sample.id=samps)
+    hist(miss.samp, breaks=100, main="Sample Missing Data (post-filt)")
+    
+    print(paste("Num SNPs:", length(snps)))
+    print(paste("Num Samples:", length(samps)))
+    return(list(snps=snps, samps=samps))
+}
+
+ssp.geno = function(geno, filt) {
+    ibs = snpgdsIBS(geno, sample.id=filt$samps, snp.id=filt$snps,
+                    autosome.only=F, num.thread=4)
+    ibs.nacnt = rowSums(is.na(ibs$ibs))
+    table(ibs.nacnt)
+    return(ibs)
+}
+
+distimpute = function(ibs, thresh=5, maxdist = 1) {
+    dist = 1 - ibs$ibs 
+    nasum = colSums(is.na(dist))
+    pass = nasum < thresh
+    dist = dist[pass,pass]
+    
+    ibs$sample.id = ibs$sample.id[pass]
+    
+    dist.ut = dist
+    dist.ut[upper.tri(dist.ut,diag=T)] = 0
+    nasum = colSums(is.na(dist.ut))
+    
+    # impute
+    for (j in which(nasum > 0)) {
+        for (i in which(is.na(dist[,j]))) {
+            k = which(dist.ut[,j] == max(dist.ut[,j], na.rm=T))
+            if (length(k) > 1) {
+                k = k[1]
+            }
+            if (dist[k, j] <= maxdist) {
+                dist[i, j] = max(dist[k, j], # k, j is neighbour -> self
+                                 dist[k, i]) # k, i is neighbour -> other
+                dist[j, i] = max(dist[k, j], # k, j is neighbour -> self
+                                 dist[k, i]) # k, i is neighbour -> other
+            }
+        }
+    }
+    
+    ibs$ibs = 1 - dist
+    return(ibs)
+}
+
+
+distimpute2 = function(ibs, max.NAs=0, max.dist = 0.2) {
+    dist = 1 - ibs$ibs 
+    
+    dist.ut = dist
+    dist.ut[upper.tri(dist.ut,diag=T)] = 0
+    nasum = colSums(is.na(dist.ut))
+    num.imputed = 0
+    # impute
+    for (j in which(nasum > 0)) {
+        for (i in which(is.na(dist[,j]))) {
+            k = which(dist.ut[,j] == max(dist.ut[,j], na.rm=T))
+            if (length(k) > 1) {
+                k = k[1]
+            }
+            if (dist[k, j] <= max.dist) {
+                num.imputed = num.imputed + 1
+                dist[i, j] = max(dist[k, j], # k, j is neighbour -> self
+                                 dist[k, i]) # k, i is neighbour -> other
+                dist[j, i] = max(dist[k, j], # k, j is neighbour -> self
+                                 dist[k, i]) # k, i is neighbour -> other
+            }
+        }
+    }
+
+    num.removed = 0
+    while (sum(is.na(dist)) > 0) {
+        rm = which.max(colSums(is.na(dist)))
+        dist = dist[-rm,]
+        dist = dist[,-rm]
+        ibs$sample.id = ibs$sample.id[-rm]
+        num.removed = num.removed + 1
+    }
+    ibs$ibs = 1 - dist
+    ibs$num.imputed = num.imputed
+    ibs$num.removed = num.removed
+    print(paste("Num imputed:", num.imputed))
+    print(paste("Num removed:", num.removed))
+    return(ibs)
+}
+```
+
+
+# Distachyon
+
+```{r dis}
+samp.rils = metadata %>%
+    filter(grepl("^RIL", accession)) %>% 
+    select(anon.name) %>%
+    unlist
+samp.dis.sansrils = samp.dis[! samp.dis %in% samp.rils]
+filt.dis = ssp.filt(geno, samp.dis.sansrils, snp.dis, min.maf=0.01,
+                    max.samp.miss.rate = 0.995, max.snp.miss.rate=0.97)
+ibs.dis = ssp.geno(geno, filt.dis)
+ibs.dis.imp = distimpute2(ibs.dis, max.dist = 0.2)
+```
+
+After the distance interpolation, we have interpolated `r ibs.dis.imp$num.imputed` entries, and have removed `r ibs.dis.imp$num.removed` samples.
+
+
+## Find optimal z threshold
+
+Run over a range of z thresholds.
+
+```{r zthresh}
+grouping = metadata %>% 
+    select(accession, anon.name)
+
+for (zthresh in seq(1, 4, 0.33)) {
+    cut.dis = snpgdsHCluster(ibs.dis.imp) %>% 
+        snpgdsCutTree(outlier.n=0, z.threshold = zthresh)
+    s = cut.dis$sample.id
+    grouping = grouping %>% 
+        filter(anon.name %in% cut.dis$sample.id)
+    d = cut.dis$samp.group[match(grouping$anon.name, s)]
+    snpgdsDrawTree(cut.dis)
+    
+    grouping[[paste0("GroupAt", zthresh, "_Ngrps", length(table(d)))]] = d
+}
+
+write.csv(grouping, "out/group_zscores.csv", row.names = F)
+```
+
+
+## Call genotypes
+
+```{r best.z}
+best.z.thresh = 3.5
+best.z.hc = snpgdsHCluster(ibs.dis.imp) %>% 
+    snpgdsCutTree(outlier.n=0, z.threshold = best.z.thresh)
+snpgdsDrawTree(best.z.hc)
+sort(table(best.z.hc$samp.group), decreasing = T)
+```
+
+```{r genocall}
+genocall = metadata %>% 
+    select(accession, anon.name) %>% 
+    filter(anon.name %in% best.z.hc$sample.id)
+genocall$group = best.z.hc$samp.group
+genocall$missing.rate = snpgdsSampMissRate(geno, sample.id=as.character(genocall$anon.name),
+                                           snp.id = filt.dis$snps)
+write.csv(genocall, "out/genotypes.csv", row.names = F)
+```
+
+Now, we take the indiviudal run with the least missing data from each clonal lineage
+
+```{r geno.best}
+genocall.best = genocall %>% 
+    group_by(group) %>% 
+    summarise(anon.name = anon.name[which.min(missing.rate)],
+              accession = accession[which.min(missing.rate)],
+              missing.rate = min(missing.rate))
+
+write.csv(genocall.best, "out/genotypes_best.csv", row.names = F)
+```
+
+```{r filtersnps}
+samps = genocall.best$anon.name
+snps = filt.dis$snps
+max.snp.miss.rate = 0.9
+min.maf = 0.02
+
+srf = snpgdsSNPRateFreq(geno, sample.id=samps, snp.id=snps)
 miss.snp = srf$MissingRate
-hist(miss.snp, breaks=50)
-abline(v=max.snp.miss.rate, col="blue", lwd=2)
+hist(miss.snp, breaks=100, main="SNP missing data")
+abline(v=max.snp.miss.rate, lwd=2, col="blue")
 
 maf = srf$MinorFreq
-hist(maf, breaks=50)
+hist(maf, breaks=50, main="SNP MAF")
 abline(v=min.maf, lwd=2, col="blue")
 
-snp.mismaffilt = snpgdsSelectSNP(geno, sample.id = samp.missfilt, maf=min.maf,
-                                 missing.rate=max.snp.miss.rate, autosome.only=F)
-length(snp.mismaffilt)
+snps = snpgdsSelectSNP(geno, sample.id=samps, snp.id=snps, maf=min.maf,
+                       missing.rate=max.snp.miss.rate, autosome.only=F)
+
+print(paste("Num SNPs:", length(snps)))
+print(paste("Num Samples:", length(samps)))
+```
+
+```{r structure}
+struct.genos = snpgdsGetGeno(geno, sample.id = samps, snp.id=snps)
+rownames(struct.genos) = samps
+struct.genos[struct.genos==1] = NA
+write.table(struct.genos, "out/structure_genos_bdis.txt", na="-9",
+            sep="\t", quote = F, col.names = F)
 ```
 
 
-```{r image,dev="png"}
-image(snpgdsGetGeno(geno, sample.id=samp.missfilt, snp.id=sample(snp.mismaffilt, size = 20000)))
+```{r bd-plot}
+ibs.plot.dis = ibs.dis.imp
+ibs.plot.dis$sample.id = metadata$accession[match(ibs.plot.dis$sample.id, metadata$anon.name)]
+snpgdsDrawTree(best.z.hc, leaflab="perpendicular")
 ```
-
-Sparse as fark!
-
-
-```{r ibs}
-ibs = snpgdsIBS(geno, sample.id=samp.missfilt, snp.id=snp.mismaffilt,
-                autosome.only=F, num.thread=4)
-ibs.nacnt = rowSums(is.na(ibs$ibs))
-table(ibs.nacnt)
-samp.ibsna = ibs$sample.id[ibs.nacnt <= 1]
-ibs = snpgdsIBS(geno, sample.id=samp.ibsna, snp.id=snp.mismaffilt,
-                autosome.only=F, num.thread = 4)
-ibs.nacnt = rowSums(is.na(ibs$ibs))
-table(ibs.nacnt)
+```{r bdplot.pdf,include=F}
+pdf("out/best_dendro_bdis_z3.6.pdf", width=50, height=10)
+snpgdsDrawTree(best.z.hc, leaflab="perpendicular")
+dev.off()
 ```
 
 
+# Hybridum and stacei
 
-```{r}
-hc = snpgdsHCluster(ibs)
-hc %>% 
+```{r hyb}
+filt.hyb = ssp.filt(geno, samp.hyb, snp.all, min.maf=0.01,
+                    max.samp.miss.rate = 0.99, max.snp.miss.rate=0.97)
+
+ibs.hyb = ssp.geno(geno, filt.hyb)
+ibs.hyb.imp = distimpute2(ibs.hyb, max.dist = 0.2)
+
+table(colSums(is.na(ibs.hyb.imp$ibs)))
+snpgdsHCluster(ibs.hyb.imp) %>% 
     snpgdsCutTree() %>% 
+    snpgdsDrawTree(outlier.n = 0)
+```
+
+
+```{r sta}
+filt.sta = ssp.filt(geno, samp.sta, snp.sta, min.maf=0.01,
+                    max.samp.miss.rate = 0.99, max.snp.miss.rate=0.97)
+ibs.sta = ssp.geno(geno, filt.sta)
+ibs.sta.imp = distimpute2(ibs.hyb, max.dist = 0.2)
+
+table(colSums(is.na(ibs.sta.imp$ibs)))
+snpgdsHCluster(ibs.sta.imp) %>% 
+    snpgdsCutTree(outlier.n=0) %>% 
     snpgdsDrawTree()
 ```
-
-
-```{r}
-d = dist(is.na(snpgdsGetGeno(geno,snp.id=sample(1:1700000, size = 1000))))
-```
-
-
-
