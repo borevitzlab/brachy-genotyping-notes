@@ -1,0 +1,47 @@
+---
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+# Axe read stats
+
+```{r}
+rs = read.delim("data/2017-12-12_demux-stats.tsv")
+str(rs)
+```
+
+## Histogram
+
+```{r}
+hist(rs$Count, main="Histogram of Reads Per Sample", breaks=20)
+hist(log(rs$Count), main="Histogram of Reads Per Sample", breaks=20)
+```
+
+```{r}
+median(rs$Count)
+```
+
+# stats on post-qc reads
+
+```{r}
+shx = read.delim("data/2017-12-12_br-readstats.tsv") %>% 
+    mutate(mbp = bases/1e6)
+str(shx)
+```
+
+## Histogram
+
+```{r}
+hist(shx$mbp, main="Histogram of Mbp Per Sample", breaks=20)
+hist(log(shx$mbp), main="Histogram of Mbp Per Sample", breaks=20)
+```
+
+```{r}
+median(shx$reads)
+median(shx$bases)
+median(shx$mbp)
+```

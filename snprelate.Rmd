@@ -19,8 +19,8 @@ spp = read.csv("data/species_id.csv")
 ```
 
 ```{r vcf2gds,cache=T}
-snpgdsVCF2GDS("data/2017-11-30_bhybridum_filtered_default.vcf.gz",
-              "data/2017-11-30_bhybridum_filtered_default.gds")
+#snpgdsVCF2GDS("data/2017-11-30_bhybridum_filtered_default.vcf.gz",
+#              "data/2017-11-30_bhybridum_filtered_default.gds")
 ```
 
 ```{r geno.open}
@@ -182,10 +182,13 @@ samp.rils = metadata %>%
     select(anon.name) %>%
     unlist
 samp.dis.sansrils = samp.dis[! samp.dis %in% samp.rils]
+
 filt.dis = ssp.filt(geno, samp.dis.sansrils, snp.dis, min.maf=0.01,
-                    max.samp.miss.rate = 0.995, max.snp.miss.rate=0.97)
+                    max.samp.miss.rate = 0.995, max.snp.miss.rate=0.95)
+
 ibs.dis = ssp.geno(geno, filt.dis)
 ibs.dis.imp = distimpute2(ibs.dis, max.dist = 0.2)
+dim(ibs.dis.imp$ibs)
 ```
 
 After the distance interpolation, we have interpolated `r ibs.dis.imp$num.imputed` entries, and have removed `r ibs.dis.imp$num.removed` samples.
@@ -199,7 +202,7 @@ Run over a range of z thresholds.
 grouping = metadata %>% 
     select(accession, anon.name)
 
-for (zthresh in seq(1, 4, 0.33)) {
+for (zthresh in c(seq(1, 4, 0.5), 5:10)) {
     cut.dis = snpgdsHCluster(ibs.dis.imp) %>% 
         snpgdsCutTree(outlier.n=0, z.threshold = zthresh)
     s = cut.dis$sample.id
@@ -279,13 +282,124 @@ write.table(struct.genos, "out/structure_genos_bdis.txt", na="-9",
 
 
 ```{r bd-plot}
-ibs.plot.dis = ibs.dis.imp
-ibs.plot.dis$sample.id = metadata$accession[match(ibs.plot.dis$sample.id, metadata$anon.name)]
-snpgdsDrawTree(best.z.hc, leaflab="perpendicular")
+ibs.dis.plt = ibs.dis.imp
+ibs.dis.plt$sample.id = paste(metadata$anon.name[match(ibs.dis.imp$sample.id, metadata$anon.name)],
+                              metadata$accession[match(ibs.dis.imp$sample.id, metadata$anon.name)])
+                              
+
+hc.dis.plt = snpgdsHCluster(ibs.dis.plt) %>% 
+    snpgdsCutTree(outlier.n=0, z.threshold = best.z.thresh, label.H = F, label.Z = F)
+snpgdsDrawTree(hc.dis.plt, leaflab="perpendicular")
 ```
 ```{r bdplot.pdf,include=F}
-pdf("out/best_dendro_bdis_z3.6.pdf", width=50, height=10)
-snpgdsDrawTree(best.z.hc, leaflab="perpendicular")
+plotdendro = function (obj, clust.count = NULL, dend.idx = NULL, type = c("dendrogram", 
+    "z-score"), yaxis.height = TRUE, yaxis.kinship = TRUE, y.kinship.baseline = NaN, 
+    y.label.kinship = FALSE, outlier.n = NULL, shadow.col = c(rgb(0.5, 
+        0.5, 0.5, 0.25), rgb(0.5, 0.5, 0.5, 0.05)), outlier.col = rgb(1, 
+        0.5, 0.5, 0.5), leaflab = "none", labels = NULL, y.label = 0.2, 
+    ...) 
+{
+    stopifnot(is.null(dend.idx) | is.numeric(dend.idx))
+    type <- match.arg(type)
+    stopifnot(is.numeric(y.kinship.baseline))
+    if (type == "dendrogram") {
+        stopifnot(!is.null(obj$dendrogram))
+        stopifnot(is.null(outlier.n) | is.numeric(outlier.n))
+        if (is.null(clust.count)) 
+            clust.count <- obj$clust.count
+        if (is.null(outlier.n)) 
+            outlier.n <- obj$outlier.n
+        if (!is.null(dend.idx)) {
+            den <- obj$dendrogram[[dend.idx]]
+            x.offset <- 0
+            for (i in 1:length(dend.idx)) {
+                if (dend.idx[i] == 2) {
+                  IX <- dend.idx[1:i]
+                  IX[i] <- 1
+                  x.offset <- x.offset + attr(obj$dendrogram[[IX]], 
+                    "member")
+                }
+            }
+        }
+        else {
+            den <- obj$dendrogram
+            x.offset <- 0
+        }
+        par(mar = c(8, 4, 4, 4))
+        oldpar <- par(mgp = c(5, 1, 0))
+        plot(den, leaflab = leaflab, axes = FALSE, ...)
+        par(oldpar)
+        if (yaxis.height) {
+            axis(side = 2, line = 0)
+            tmp <- list(...)
+            if (!is.null(tmp$ylab)) 
+                ylab <- tmp$ylab
+            else ylab <- "individual dissimilarity"
+            mtext(ylab, side = 2, line = 2.5)
+        }
+        if (yaxis.kinship) {
+            if (is.finite(y.kinship.baseline)) {
+                y.kinship.baseline <- y.kinship.baseline[1]
+            }
+            else {
+                y.kinship.baseline <- attr(den, "height")
+            }
+            ym <- pretty(c(0, 1))
+            axis(side = 4, (1 - ym) * y.kinship.baseline, ym, 
+                line = 0)
+            mtext("coancestry coefficient", 4, line = 2.5)
+        }
+        if (!is.null(clust.count)) {
+            m <- c(0, cumsum(clust.count))
+            jj <- 1
+            k <- 1
+            for (i in 1:length(clust.count)) {
+                if (clust.count[i] > outlier.n) {
+                  rect(m[i] + 0.5 - x.offset, par("usr")[3L], 
+                    m[i + 1] + 0.5 - x.offset, par("usr")[4L], 
+                    col = shadow.col[jj], border = NA)
+                  jj <- 3 - jj
+                  if (!is.null(labels[k])) 
+                    text((m[i] + m[i + 1])/2 - x.offset, y.label, 
+                      labels[k])
+                  k <- k + 1
+                }
+                else {
+                  rect(m[i] + 0.5 - x.offset, par("usr")[3L], 
+                    m[i + 1] + 0.5 - x.offset, par("usr")[4L], 
+                    col = outlier.col, border = NA)
+                }
+            }
+        }
+        if (0){#yaxis.kinship & y.label.kinship) {
+            h1 <- (1 - 0.5) * y.kinship.baseline
+            abline(h = h1, lty = 2, col = "gray")
+            h2 <- (1 - 0.25) * y.kinship.baseline
+            abline(h = h2, lty = 2, col = "gray")
+            h3 <- (1 - 1/8) * y.kinship.baseline
+            abline(h = h3, lty = 2, col = "gray")
+            h4 <- (1 - 1/16) * y.kinship.baseline
+            abline(h = h4, lty = 2, col = "gray")
+            axis(side = 4, c(h1, h2, h3, h4), c("twins", "PC/FS", 
+                "DFC/HS", "FC"), tick = FALSE, line = -0.75, 
+                las = 2, cex.axis = 0.75, col.axis = "gray25")
+        }
+    }
+    else if (type == "z-score") {
+        if (is.null(obj$merge)) 
+            stop("There is no Z score in this object.")
+        y <- obj$merge[, 1]
+        y <- y[order(y, decreasing = TRUE)]
+        plot(y, xlab = "the order of Z score", ylab = "Z score", 
+            type = "b", pch = "+", log = "x", ...)
+        abline(h = 15, col = "gray", lty = 2)
+    }
+    invisible()
+}
+
+pdf(paste0("out/best_dendro_bdis_z", best.z.thresh, ".pdf"), width=70, height=10)
+par(mar=c(10,2, 1, 1))
+plotdendro(hc.dis.plt, leaflab="perpendicular")
 dev.off()
 ```
 
