@@ -196,9 +196,9 @@ After the distance interpolation, we have interpolated `r ibs.dis.imp$num.impute
 
 ## Find optimal z threshold
 
-Run over a range of z thresholds.
+Run over a range of z thresholds. (Not shown in final output)
 
-```{r zthresh}
+```{r zthresh, include=F}
 grouping = metadata %>% 
     select(accession, anon.name)
 
@@ -220,7 +220,7 @@ write.csv(grouping, "out/group_zscores.csv", row.names = F)
 ## Plot draft dendrogram
 
 ```{r bd-plot}
-best.z.thresh = 2.5
+best.z.thresh = 3
 ibs.dis.plt = ibs.dis.imp
 ibs.dis.plt$sample.id = paste(metadata$anon.name[match(ibs.dis.imp$sample.id, metadata$anon.name)],
                               metadata$accession[match(ibs.dis.imp$sample.id, metadata$anon.name)])
@@ -358,9 +358,9 @@ dim(ibs.dis.imp$ibs)
 ## Call genotypes
 
 ```{r best.z}
-best.z.thresh = 2.5
+best.z.thresh = 3.5
 best.z.hc = snpgdsHCluster(ibs.dis.imp) %>% 
-    snpgdsCutTree(outlier.n=1, z.threshold = best.z.thresh, label.Z = F)
+    snpgdsCutTree(outlier.n=0, z.threshold = best.z.thresh, label.Z = F)
 snpgdsDrawTree(best.z.hc)
 sort(table(best.z.hc$samp.group), decreasing = T)
 goodgroups = data.frame(best.z.hc[c("sample.id", "samp.group")]) %>% 
@@ -376,60 +376,103 @@ genocall$missing.rate = snpgdsSampMissRate(geno, sample.id=as.character(genocall
 write.csv(genocall, "out/genotypes.csv", row.names = F)
 ```
 
-Now, we take the indiviudal run with the least missing data from each clonal lineage
+Now, we take the indiviudal run with the least missing data from each clonal lineage. The issue is that samples are often split into multiple ajacent clonal famiiles due to shitty data. Therefore, we keep only the runs from the group with the largest number of that accession, breaking ties by keeping the run with the lowest missing data.
 
 ```{r geno.best}
+techrep.table = genocall %>% 
+    group_by(accession) %>% 
+    summarise(ngrp = length(unique(samp.group)), n = n()) %>% 
+    filter(n > 1)
+table(techrep.table$ngrp > 1)
+
+bad.techreps = genocall %>%
+    group_by(accession, samp.group) %>% 
+    mutate(n=n()) %>% 
+    ungroup() %>% 
+    group_by(accession) %>% 
+    mutate(maxn = max(n)) %>% 
+    filter(n != maxn)
+bad.techreps = bad.techreps$anon.name
+    
+
 genocall.best = genocall %>% 
+    filter(!anon.name %in% bad.techreps) %>% 
     group_by(samp.group) %>% 
     summarise(anon.name = anon.name[which.min(missing.rate)],
               accession = accession[which.min(missing.rate)],
+              missing.rate = min(missing.rate)) %>% 
+    group_by(accession) %>% 
+    summarise(anon.name = anon.name[which.min(missing.rate)],
+              samp.group = samp.group[which.min(missing.rate)],
               missing.rate = min(missing.rate))
+    
+
+techrep.table = genocall.best %>% 
+    group_by(accession) %>% 
+    summarise(ngrp = length(unique(samp.group)), n = n())
+table(techrep.table$ngrp > 1)
 
 write.csv(genocall.best, "out/genotypes_best.csv", row.names = F)
 ```
 
-```{r filtersnps}
+# Structure input generation
+
+```{r getsnps, dev="png"}
 samps = genocall.best$anon.name
 snps = filt.dis$snps
 max.snp.miss.rate = 0.9
 min.maf = 0.05
-
-srf = snpgdsSNPRateFreq(geno, sample.id=samps, snp.id=snps)
-miss.snp = srf$MissingRate
-hist(miss.snp, breaks=100, main="SNP missing data")
-abline(v=max.snp.miss.rate, lwd=2, col="blue")
-
-maf = srf$MinorFreq
-hist(maf, breaks=50, main="SNP MAF")
-abline(v=min.maf, lwd=2, col="blue")
+min.mad = 4
+non.miss.samps = 101
 
 snps = snpgdsSelectSNP(geno, sample.id=samps, snp.id=snps, maf=min.maf,
                        missing.rate=max.snp.miss.rate, autosome.only=F)
 
-srf.post = snpgdsSNPRateFreq(geno, sample.id=samps, snp.id=snps)
-hist(srf.post$MissingRate, breaks=100, main="SNP missing data (post)")
+struct.genos = snpgdsGetGeno(geno, sample.id = samps, snp.id=snps)
+rownames(struct.genos) = samps
+# Hets to NA
+table(struct.genos==1)
+struct.genos[struct.genos==1] = NA
 
-print(paste("Num SNPs:", length(snps)))
-print(paste("Num Samples:", length(samps)))
+# Image thereof
+image(struct.genos)
 ```
 
-```{r structure}
-struct.genos = snpgdsGetGeno(geno, sample.id = samps, snp.id=snps)
-hist(colSums(struct.genos, na.rm = T))
-table(colSums(struct.genos, na.rm = T)==2)
-hist(colSums(is.na(struct.genos))/nrow(struct.genos))
-rownames(struct.genos) = samps
-struct.genos[struct.genos==1] = NA
+```{r s.missing, dev="png"}
+is.non.miss = colSums(is.na(struct.genos)) <= 101
+table(is.non.miss)
+struct.genos = struct.genos[,is.non.miss]
+hist(colSums(is.na(struct.genos)))
+```
+
+```{r}
+# MAD
+struct.mad = colSums(struct.genos, na.rm = T)
+hist(struct.mad, breaks=nrow(struct.genos))
+table(struct.mad >= 4)
+struct.genos = struct.genos[,struct.mad >= 4]
+```
+
+### Sample names
+```{r names, echo=F}
+print(as.character(metadata[match(samps, metadata$anon.name),]$accession))
+```
+
+
+```{r s.imagewrite,dev="png"}
+image(struct.genos)
+print(paste("Num SNPs:", ncol(struct.genos)))
+print(paste("Num Samples:", nrow(struct.genos)))
 write.table(struct.genos, "out/structure_genos_bdis.txt", na="-9",
             sep="\t", quote = F, col.names = F)
 ```
+
 
 ```{r bd-plotfinal}
 ibs.dis.plt = ibs.dis.imp
 ibs.dis.plt$sample.id = paste(metadata$anon.name[match(ibs.dis.imp$sample.id, metadata$anon.name)],
                               metadata$accession[match(ibs.dis.imp$sample.id, metadata$anon.name)])
                               
-
 hc.dis.plt = snpgdsHCluster(ibs.dis.plt) %>% 
     snpgdsCutTree(outlier.n=1, z.threshold = best.z.thresh, label.H = F, label.Z = F)
 snpgdsDrawTree(hc.dis.plt, leaflab="perpendicular")

@@ -31,3 +31,27 @@ ggplot(readstats, aes(x=dodgy, y=missing)) +
 
 t.test(bases ~ dodgy, data=readstats)
 t.test(missing ~ dodgy, data=readstats)
+
+
+
+
+dup.acc = metadata[match(genocall.best$anon.name, metadata$anon.name),]$accession %>% 
+    as.character() %>% 
+    table() 
+dup.acc = names(dup.acc[dup.acc>1])
+dup.acc
+
+ginspect = genocall %>% 
+    filter(anon.name %in% samps) %>% 
+    arrange(accession) %>% 
+    filter(accession %in% dup.acc)
+geno.tab = genocall %>%
+    group_by(samp.group) %>% 
+    summarise(accessions = paste(paste(accession, anon.name), collapse = "; ")) %>%
+    as.data.frame()
+write_delim(geno.tab, "out/genogrouping.txt")
+
+
+hist(colSums(struct.genos, na.rm = T))
+table(colSums(struct.genos, na.rm = T)==2)
+hist(colSums(is.na(struct.genos))/nrow(struct.genos))
