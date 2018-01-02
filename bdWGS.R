@@ -1,0 +1,347 @@
+install.packages("VariantAnnotation")
+library(hierfstat)
+library(VariantAnnotation)
+setwd("Downloads/")
+
+
+#bd <- readGT("filtered_BrachyGBSbd21-3bsABR114.vcf.gz") #takes a few min to readin
+#https://edmund.anu.edu.au/~kevin/brachy_geno/gbs/bhybridum/filtered_default.vcf.gz
+
+
+#https://edmund.anu.edu.au/~kevin/brachy_geno/wgs/freebayes_strict.vcf.gz
+
+
+bd <- readGT("freebayes_strict.vcf.gz") #takes a few min to reading
+
+#on edmund
+#bd <- readGT("filtered_default.vcf.gz")
+             
+snp.names <- rownames(bd)
+snp.mat <- matrix(unlist(strsplit(snp.names,split = ":")),nrow=2)
+chr <- as.numeric(snp.mat[1,])
+table(chr)
+#chr
+#1      2      3      4      5     12     14 
+#643667 554157 614728 527149 308756    404     60 
+snp.mat2 <- matrix(unlist(strsplit(snp.mat[2,],split = "_")),nrow=2)
+pos <- as.numeric(snp.mat2[1,])
+
+samp.names <- colnames(bd)
+samp.mat <- matrix(unlist(strsplit(samp.names,split = "_")),nrow=2)
+samp.names <- sub("-WGS","",samp.mat[1,])
+
+AccGBS <- read.csv("https://raw.githubusercontent.com/borevitzlab/brachy-genotyping/master/metadata/brachy-metadata_TO-Check.csv")
+#AccGBS <- read.csv("BdAccessionGenotypes.csv")  ## need to update
+summary(AccGBS)
+samp.names[which(samp.names=="BAR1020")] <- "Bar1020"
+samp.names[which(samp.names=="Gaz6")] <- "Gaz-6"
+samp.names[which(samp.names=="Bd1-1-t1")] <- "Bd1-1"
+samp.names[which(samp.names=="Bd21-t1")] <- "Bd21"
+idx.wgs.gbs <- match(samp.names,AccGBS$accession)
+idx.gbs.wgs <- match(AccGBS$accession,samp.names)
+
+samp.names[which(is.na(idx.wgs.gbs))]
+#[1] "BAR1020"  "Bd1-1-t1" "Bd1-1-t2" "Bd21-t1"  "Bd21-t2"  "Bd21-t3"  "Bd21-t4"  "Cas1"     "Gaz6"     "Mur3"     "neg-ctrl" "Pal1"     "Rei7"     "Sar2"    
+#[15] "Sig2"     "USDA4006" "Yas3"
+
+#Sar2
+#Sig2
+#Yas3
+#USDA4006
+
+
+
+
+######### QC genotype calls 0/1 0/2 ignored.
+bd.a <- bd=="0/0"
+bd.b <- bd=="1/1"
+## only valid genotypes
+
+## write over large matrix
+bd <- matrix(NA,ncol=ncol(bd.a),nrow=nrow(bd.a))
+colnames(bd) <- samp.names
+bd[bd.a] <- 0
+bd[bd.b] <- 1
+rownames(bd) <- paste(chr,pos,sep="-")
+sum(bd.a)/length(bd) # ref allele bd21-1
+#[1] 0.5756013
+sum(bd.b)/length(bd) # alternate allele
+#[1] 0.2322683
+
+rm(bd.a)
+rm(bd.b) # save memory
+gc() #memory cleanup
+
+id.g <- seq(1,nrow(bd),100)
+#length(id.g)
+#[1] 26490
+
+save(bd,compress=T,file="WGS106Bd.RData")
+## sample QC
+samp.na <- colSums(is.na(bd))
+
+rownames(bd) <- paste0("chr",chr,"-",pos)
+
+hist(samp.na,breaks=20)
+thresh <- 1500000
+abline(v = thresh)
+samp.names[which(samp.na > thresh)]
+#[1] "Bd1-1-t2" "BdTR12a"  "neg-ctrl"
+
+## exclude outgroup accessions
+out.acc <- c("Bd1-1-t1","Cas2","WLE2-2")
+subgroup <- samp.names%in%out.acc
+## also select one of the biological repliates that was phenotyped
+
+
+
+# automate with cutree below
+#bio.rep.out.acc <- c("Bdis28-7","Bdis05-1","Bd21-t2","Bd21-t3","Bd21-t4","BdTR13b","BdTR13k","BdTR13m","BdTR3m","BdTR3t","BdTR3j","BdTR3h","Gaz-4",
+ #                    "BdTR1f","BdTR1g","BdTR1j","BdTR1k","BdTR2d","BdTR2f","BdTR2h","BdTR2n","BdTR2o" , "BdTR2)
+
+
+unique.genotypes <- c(
+"ABR2"  ,    "ABR4"  ,    "ABR5"  ,    "Adi-15"   , "Adi-16" ,   "Adi-18"  ,  "Adi-1"  ,   "Adi-6"  ,   "Adi-8" ,    "Adi-9"    , "BAR1020"  , "Bd18-1"   
+, "Bd21-3"  ,  "Bd21-t1"  , "Bd30-1"   , "Bd3-1"  ,   "Bdis03-6" , "Bdis05-1" , "Bdis05-7",  "Bdis22-10" ,"Bdis22-1" , "Bdis22-5" , "Bdis22-6" , "Bdis23-1" 
+,"Bdis23-2" , "Bdis23-5" , "Bdis25-10", "Bdis25-1",  "Bdis25-4" , "Bdis25-5" , "Bdis25-8" , "Bdis28-7",  "Bdis31-1" , "Bdis31-2" , "Bdis32-2"  ,"BdTR10c"  
+, "BdTR11a" ,  "BdTR12c",   "BdTR13b"  , "BdTR1c" ,   "BdTR3a"  ,  "BdTR5g"  ,  "BdTR9a"  ,  "Cas1" ,     "Gal1"   ,   "Gaz-2" ,    "Gaz-3"  ,   "Kah-1"    
+, "Kah-5"  ,   "Kah-6"  ,   "Koz-2"  ,   "Koz-3"  ,   "Mig3"     , "Mur3"   ,   "Pal1" ,     "Pal2032" ,  "Rei7"   ,   "Sig2"  ,    "USDA4006" , "Yas3" ) 
+
+# redundant accessions that have phenotype data
+# exclude for LD analyis otherwise keep
+#bio.rep.in.acc <- c("Sar2","BdTR13d","BdTR3b","BdTR3s","Gaz6","BdTR1d","BdTR1k","BdTR2a","BdTR2j","BdTR2p")
+idy <- colnames(bd)%in% c(out.acc, unique.genotypes)
+
+bd.struct <- bd[id.g,idy]
+
+write.table(t(bd.struct), file="bdWGSstruct63chr.txt",sep="\t",na = "-9",quote=F,col.names = T)
+
+# idy <- samp.na < thresh # & !samp.names%in%out.acc # & samp.names%in%bio.rep.out.acc 
+#bd <- bd[,unique.genotypes]
+bd <- bd[,idy]
+samp.names <- samp.names[idy]
+samp.names <- samp.names[unique.genotypes]
+
+
+
+rownames(bd) <- paste(chr,pos,sep="_")
+
+## snp QC
+snp.na <- rowSums(is.na(bd))
+hist(snp.na,breaks = ncol(bd))
+thresh <- ncol(bd)/4 ## 75% present
+abline(v = thresh)
+table(snp.na < thresh)
+#FALSE    TRUE 
+#489422 2159499 
+
+bd <- bd[snp.na < thresh,]
+chr <- chr[snp.na < thresh]
+pos <- pos[snp.na < thresh]
+
+snp.freq <- rowMeans(bd,na.rm=T)
+hist(snp.freq, breaks = ncol(bd))
+
+# minor allele freq
+thresh <- 4
+c.snp <- snp.freq > thresh/ncol(bd) & snp.freq < (ncol(bd) - thresh)/ncol(bd) 
+table(c.snp)
+abline(v=thresh/ncol(bd))
+#FALSE    TRUE 
+#771971 1387528 
+# consider clusting based on rare variants 
+# bd <- bd[!c.snp,] 
+bd <- bd[c.snp,] 
+chr <- chr[c.snp]
+pos <- pos[c.snp]
+
+dist.1.3 = dist(t(bd[1:100000,]), method = "manhattan")
+hist(dist.1.3, breaks=100)
+hc <- hclust(dist.1.3)
+plot(hc)
+
+
+pop.intra <- cutree(hc,h=40000)
+
+table(pop.intra)
+
+cr = apply(bd[1:100000,], 1, function (x) cor(x,pop.intra, use = "pairwise.complete.obs") ^2 )
+hist(cr, breaks=100)
+
+pop.intra.samp <- sample(pop.intra)
+cr.samp = apply(bd[1:100000,], 1, function (x) cor(x, pop.intra.samp, use = "pairwise.complete.obs") ^2 )
+table(cr==1) 
+table(cr.samp==1) 
+
+
+## KDM INTRA-GENOTYPE DISTANCE
+bd.sub = t(bd[sample(nrow(bd),100000),])
+table(bd.sub)
+
+
+
+# L1 distance is important: equates to hamming w/ 0/1 coded data.
+d.intra = dist(bd.sub, method = "manhattan")
+hist(d.intra, breaks=100)
+
+# cluster
+hc.intra = hclust(d.intra)
+plot(hc.intra)
+
+# Select genotypes
+genos.intra <- cutree(hc.intra,h=1000)
+g.multi = table(genos.intra)[table(genos.intra) > 1]
+
+d.intra.m = as.matrix(d.intra)
+intra.dists = c()
+for (geno in names(g.multi)) {
+  samples = which(genos.intra == geno)
+  # Acutal hamming dist: dists = combn(samples, 2, function(x) {sum(abs(bd.sub[x[1],] - bd.sub[x[2],]))})
+  # Manhattan scaled by # of NAs
+  dists = combn(samples, 2, function(x) {d.intra.m[x[1], x[2]]})
+  intra.dists = c(intra.dists, dists)
+}
+hist(intra.dists, breaks=40)
+intra.pi = intra.dists / ncol(bd.sub)
+hist(intra.pi, breaks=40)
+
+
+## END KDM
+
+# Select genotypes
+subApop <- cutree(hc.intra,h=30000)
+g.multi = table(genos.intra)[table(genos.intra) > 1]
+
+d.intra.m = as.matrix(d.intra)
+intra.dists = c()
+for (geno in names(g.multi)) {
+  samples = which(genos.intra == geno)
+  
+
+
+
+
+
+
+
+
+
+dt <- dist(t(bd[sample(nrow(bd),100000),])) # takes awhile
+hc <- hclust(dt)
+pdf("BDWGS60.1.4McSNP.pdf")
+pdf("BDWGS107.2.5McSNP.pdf")
+plot(hc,cex=0.4)
+abline(h=30)
+image(1:ncol(bd),1:ncol(bd),as.matrix(dt)[hc$order,hc$order],axes=F, xlab = "samples",ylab="samples")
+axis(1,1:ncol(bd),hc$labels[hc$order],srt=45,xpd=T,cex.axis=0.3,las=2)
+axis(2,1:ncol(bd),hc$labels[hc$order],srt=90,cex.axis=0.3,las=2)
+dev.off()
+
+# find replicates
+tree.cut <- cutree(hc,h=30)
+table(tree.cut)
+temp.list <- list()
+for (i in 1:max(tree.cut)){
+  temp.list[[i]] <- names(which(tree.cut == i))
+}
+     ## need to merge genotypes within groups for better haplotype data
+uniq.genotype <- unlist(lapply(temp.list, function (x) x[1]))
+
+
+save(bd,file = "bd60.1.4M.RData",compress = T)
+
+
+## need to exclude outgroup
+out.acc <- c("Bd1-1-t1","Cas2","WLE2-2")
+
+# need to merge genotypes to fill in missing data and create missing data for inconsistencies within groups
+bdTR1.2 <- round(rowMeans(bd[,tree.cut == 41],na.rm=T),0)
+
+###### plot haplotypes
+
+win <- 3500
+step <- 250
+setwd("/Volumes/PS/Borevitz Lab/TraitCapture/User data/borevitz/BdHapPics")
+for (i in 1:1000){
+interval <- (i*step):(i*step+win)
+xlaab <- paste(pos[min(interval)],"            base pairs           ",pos[max(interval)]) 
+jpeg(paste("BdHap",i,"jpg",sep="."), width = 3840, height = 2160)
+image(interval,1:ncol(bd),bd[interval,],axes=F, xlab = xlaab,ylab="")
+#axis(1,interval,interval,srt=45,xpd=T,cex.axis=0.3,las=2)
+axis(2,1:ncol(bd),colnames(bd),srt=90,las=2)
+dev.off()
+}
+
+
+###### LD analysis
+#need to subset accessions to unique ones
+setwd("~/Downloads/BdLD")
+
+binNum <- 693
+LD.half <- rep(NA,binNum)
+for (i in c(1:211,213:binNum)){
+jpeg(paste("BdLDchr1image.",i,".png",sep=""))
+x <- i*2000 # stepset
+snp.set <- seq(1+x,2e3+x,1)
+chr.dist <- as.dist(outer(pos[snp.set],pos[snp.set],"-"))
+ld4 <- as.dist(cor(t(bd[snp.set,]),use="pair")^2)
+# gives warning see below
+ld.na <- is.na(ld4)
+print(table(ld.na))
+distance <- chr.dist[!ld.na]
+LD.data <- ld4[!ld.na]
+
+plot(distance,LD.data,pch=".")
+
+# calculate LD decay fit and half maximal distance
+# demo code from
+# https://fabiomarroni.wordpress.com/2011/08/09/estimate-decay-of-linkage-disequilibrium-with-distance/
+#distance<-c(19,49,1981,991,104,131,158,167,30,1000,5000,100,150,11,20,33,1100,1300,1500,100,1400,900,300,100,2000,100,1900,500,600,700,3000,2500,400,792)
+#LD.data<-c(0.6,0.47,0.018,0.8,0.7,0.09,0.09,0.05,0,0.001,0,0.6,0.4,0.2,0.5,0.4,0.1,0.08,0.07,0.5,0.06,0.11,0.3,0.6,0.1,0.9,0.1,0.3,0.29,0.31,0.02,0.01,0.4,0.5)
+n<-60
+HW.st<-c(C=0.1)
+HW.nonlinear<-nls(LD.data~((10+C*distance)/((2+C*distance)*(11+C*distance)))*(1+((3+C*distance)*(12+12*C*distance+(C*distance)^2))/(n*(2+C*distance)*(11+C*distance))),start=HW.st,control=nls.control(maxiter=100))
+tt<-summary(HW.nonlinear)
+new.rho <-tt$parameters[1]
+fpoints<-((10+new.rho*distance)/((2+new.rho*distance)*(11+new.rho*distance)))*(1+((3+new.rho*distance)*(12+12*new.rho*distance+(new.rho*distance)^2))/(n*(2+new.rho*distance)*(11+new.rho*distance)))
+
+df<-data.frame(distance,fpoints)
+maxld<-max(fpoints)#max(LD.data)
+#You could elucubrate if it's better to use the maximum ESTIMATED value of LD
+#In that case you just set: maxld<-max(fpoints)
+h.decay<-maxld/2
+print(LD.half[i] <- df$distance[which.min(abs(df$fpoints-h.decay))])
+points(distance[samp <- sample(len gth(fpoints),1000)],fpoints[samp],pch=".",col="red")
+#lines(HW.nonlinear)
+abline(h = h.decay,col="red")
+abline(v = LD.half[i],col="red")
+dev.off()
+}
+save(LD.half,file="LD.halfgenome.RData")
+
+# some regions don't decay, set to missing
+LD.half[LD.half < 4] <- NA
+LDhalf <- pmin(LD.half,500000)
+#Others are very big
+quantile(LDhalf,na.rm=T)
+#0%       25%       50%       75%      100% 
+#2609.00  50228.25 113162.00 233801.25 500000.00 
+
+round(quantile(LD.half,na.rm=T)/1000)
+#0%  25%  50%  75% 100% 
+#3   50  113  234 2392 
+pdf(file = "BdLDplot.pdf",height = 6, width = 15)
+plot(LDhalf/1000,type="l",xlab = "chr bin")
+abline(v=round(which(diff(chr)==1)/2000),col="red",lwd=3)
+dev.off()
+
+# suggestions from Riyan
+#Commands to find out problematic SNPs:
+  idx<- apply(is.na(ld4),1,any)
+ii<- (1:length(idx))[idx]
+snps<- rownames(ld4)[idx]
+
+Especially, check the diagonals:
+  idx<- is.na(diag(ld4))
+ii<- (1:length(idx))[idx]
+snps<- rownames(ld4)[idx]
